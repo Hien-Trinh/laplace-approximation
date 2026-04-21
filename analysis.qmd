@@ -1,0 +1,31 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+
+library(tidyverse)
+library(rstan)
+
+```
+
+```{r}
+
+data <- read_csv('flips.csv')
+
+```
+
+```{r}
+
+data %>%
+    mutate(Outcome = factor(
+        ifelse(Heads == 1, "Heads", "Tails"),
+        levels = c("Heads", "Tails") 
+    )) %>%
+    ggplot(aes(x = Stream, fill = Outcome)) +
+    geom_bar()+
+    theme_classic()+
+    labs(title = "Heads/Tails Distribution Over 2 Streams", x = "Stream", y = "Outcome Distribution")
+
+```
