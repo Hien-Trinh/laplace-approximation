@@ -8,17 +8,13 @@ format: html
 library(tidyverse)
 library(rstan)
 
-```
-
-```{r}
-
-data <- read_csv('flips.csv')
+df <- read_csv("flips.csv")
 
 ```
 
 ```{r}
 
-data %>%
+df %>%
     mutate(Outcome = factor(
         ifelse(Heads == 1, "Heads", "Tails"),
         levels = c("Heads", "Tails") 
@@ -27,5 +23,69 @@ data %>%
     geom_bar()+
     theme_classic()+
     labs(title = "Heads/Tails Distribution Over 2 Streams", x = "Stream", y = "Outcome Distribution")
+
+```
+
+```{r}
+
+set.seed(253)
+
+stan_data <- list(
+  y1 = sum(df$Heads[df$Stream == 1]),
+  n1 = sum(df$Stream == 1),
+  y2 = sum(df$Heads[df$Stream == 2]),
+  n2 = sum(df$Stream == 2)
+)
+
+fit <- stan(
+  file   = "coin_model.stan",
+  data   = stan_data,
+  chains = 4,
+  iter   = 2000,
+  warmup = 1000,
+  seed   = 42
+)
+
+print(fit, pars = c("theta1", "theta2"))
+
+samples <- extract(fit)
+
+cat("Posterior mean theta1:", mean(samples$theta1), "\n")
+cat("Posterior mean theta2:", mean(samples$theta2), "\n")
+
+cat("95% CI theta1:", quantile(samples$theta1, c(0.025, 0.975)), "\n")
+cat("95% CI theta2:", quantile(samples$theta2, c(0.025, 0.975)), "\n")
+
+```
+
+```{r}
+
+traceplot(fit)
+
+```
+
+looks good
+
+```{r}
+
+ci_df <- data.frame(
+  param = c("theta1", "theta2"),
+  mean  = c(mean(samples$theta1), mean(samples$theta2)),
+  lower = c(quantile(samples$theta1, 0.025), quantile(samples$theta2, 0.025)),
+  upper = c(quantile(samples$theta1, 0.975), quantile(samples$theta2, 0.975))
+)
+
+```
+
+```{r}
+
+ggplot(ci_df, aes(x = mean, y = param)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 0.1) +
+  xlim(0.73, 1)+
+  geom_vline(xintercept = 1, aes())+
+  theme_classic() +
+  labs(title = "95% Posterior Credible Interval",
+       y = "Parameter", x = "Value")
 
 ```
