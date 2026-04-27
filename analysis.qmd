@@ -4,7 +4,6 @@ format: html
 ---
 
 ```{r}
-
 library(tidyverse)
 library(rstan)
 
@@ -13,7 +12,6 @@ df <- read_csv("flips.csv")
 ```
 
 ```{r}
-
 df %>%
     mutate(Outcome = factor(
         ifelse(Heads == 1, "Heads", "Tails"),
@@ -23,11 +21,10 @@ df %>%
     geom_bar()+
     theme_classic()+
     labs(title = "Heads/Tails Distribution Over 2 Streams", x = "Stream", y = "Outcome Distribution")
-
 ```
 
-```{r}
 
+```{r}
 set.seed(253)
 
 stan_data <- list(
@@ -64,8 +61,6 @@ traceplot(fit)
 
 ```
 
-looks good
-
 ```{r}
 
 ci_df <- data.frame(
@@ -89,3 +84,78 @@ ggplot(ci_df, aes(x = mean, y = param)) +
        y = "Parameter", x = "Value")
 
 ```
+
+
+```{r}
+# Define the Parameters & Data
+alpha_prior <- 1.2
+beta_prior <- 0.2
+
+# Data from the streams
+y1 <- 0  # 0 cats in stream 1
+y2 <- 1  # 1 cat in stream 2
+
+# Calculations for true density (for comparison visualization only)
+alpha_post <- alpha_prior + 1
+beta_post <- beta_prior + 2
+
+# Define the Log-Posterior Function
+log_posterior_fn <- function(lambda) {
+  likelihood <- dpois(y1, lambda) * dpois(y2, lambda)
+  prior <- dgamma(lambda, shape = alpha_prior, rate = beta_prior)
+  posterior <- likelihood * prior
+  return(log(posterior))
+}
+
+# Run the optimization
+initial_guess <- 1
+fit <- optim(par = initial_guess, 
+             fn = log_posterior_fn, 
+             method = "BFGS", 
+             control = list(fnscale = -1),
+             hessian = TRUE)
+
+# Negate the Hessian to find Variance
+lambda_map <- fit$par
+
+# Since we maximized the log-posterior, fit$hessian is the true Hessian (H).
+# We negate it (-H) and invert it to get the variance.
+laplace_var <- solve(-fit$hessian)
+laplace_sd <- sqrt(as.numeric(laplace_var))
+
+cat("Mode (Lambda MAP):         ", round(lambda_map, 5), "\n")
+cat("Variance (Lambda):         ", round(as.numeric(laplace_var), 5), "\n")
+cat("Standard Deviation:       ", round(laplace_sd, 5), "\n\n")
+```
+
+```{r}
+# Viz
+x_vals <- seq(-1, 4, length.out = 500)
+
+# Calculate the densities
+true_density <- dgamma(x_vals, shape = alpha_post, rate = beta_post)
+laplace_density <- dnorm(x_vals, mean = lambda_map, sd = laplace_sd)
+
+# Plot the True Posterior
+plot(x_vals, true_density, type = "l", lwd = 3, col = "blue",
+     main = "Laplace Approx: 2 Streams (1 Cat Total)",
+     xlab = "Rate of Feral Cats (lambda)", ylab = "Density",
+     xlim = c(-1, 3.5), ylim = c(0, max(true_density, laplace_density) + 0.1))
+
+# Overlay the Laplace Approximation
+lines(x_vals, laplace_density, lwd = 3, col = "red", lty = 2)
+
+# Add a vertical line at zero to show the impossible domain
+abline(v = 0, lwd = 2, lty = 3, col = "black")
+
+# Add a legend
+legend("topright", legend = c("True Gamma Posterior", "Laplace Normal Approx", "Physical Boundary (0)"),
+       col = c("blue", "red", "black"), lty = c(1, 2, 3), lwd = 2)
+
+# Print out the impossible negative probability mass
+prob_negative <- pnorm(0, mean = lambda_map, sd = laplace_sd)
+cat("\nUpdated Mean (MAP):", round(lambda_map, 3))
+cat("\nUpdated Standard Deviation:", round(laplace_sd, 3))
+cat("\nProbability mass assigned to impossible negative values:", round(prob_negative * 100, 2), "%\n")
+```
+
