@@ -40,10 +40,10 @@ stan_data <- list(
 fit <- stan(
   file   = "coin_model.stan",
   data   = stan_data,
-  chains = 4,
-  iter   = 2000,
+  chains = 8,
+  iter   = 5000,
   warmup = 1000,
-  seed   = 42
+  seed   = 253
 )
 
 print(fit, pars = c("theta1", "theta2"))
@@ -85,6 +85,35 @@ ggplot(ci_df, aes(x = mean, y = param)) +
   theme_classic() +
   labs(title = "95% Posterior Credible Interval",
        y = "Parameter", x = "Value")
+
+```
+
+```{r}
+
+pp_samples <- tibble(
+  heads = rbinom(length(c(samples$theta1, samples$theta2)), 100, c(samples$theta1, samples$theta2))
+)
+
+laplace_mean <- mean(pp_samples$heads)
+laplace_sd   <- sd(pp_samples$heads)
+
+norm_df <- tibble(
+  x = seq(min(pp_samples$heads), max(pp_samples$heads), length.out = 500),
+  y = dnorm(x, mean = laplace_mean, sd = laplace_sd)
+)
+
+pp_samples %>%
+  count(heads) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = heads, y = prop)) +
+  geom_col(color = "steelblue", fill = "steelblue", size = 1.5) +
+  geom_line(data = norm_df, aes(x = x, y = y), linetype = "solid", linewidth = 1, color = "red") +
+  theme_classic() +
+  labs(
+    title = "Posterior Predictive: Heads in 100 Flips (Both Streams)",
+    x = "Number of Heads",
+    y = "Density"
+  )
 
 ```
 
