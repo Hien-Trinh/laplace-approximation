@@ -7,12 +7,11 @@ format: html
 library(tidyverse)
 library(rstan)
 
-df <- read_csv("flips.csv")
-
+coin_df <- read_csv("flips.csv")
 ```
 
 ```{r}
-df %>%
+coin_df %>%
     mutate(
         Outcome = factor(
             ifelse(Heads == 1, "Heads", "Tails"),
@@ -28,56 +27,137 @@ df %>%
 
 
 ```{r}
-set.seed(253)
-
-stan_data <- list(
-  y1 = sum(df$Heads[df$Stream == 1]),
-  n1 = sum(df$Stream == 1),
-  y2 = sum(df$Heads[df$Stream == 2]),
-  n2 = sum(df$Stream == 2)
+coin_data <- list(
+  y1 = sum(coin_df$Heads[coin_df$Stream == 1]),
+  n1 = sum(coin_df$Stream == 1),
+  y2 = sum(coin_df$Heads[coin_df$Stream == 2]),
+  n2 = sum(coin_df$Stream == 2),
+  alpha1 = 90,
+  alpha2 = 90,
+  beta1 = 10,
+  beta2 = 10
 )
 
-fit <- stan(
+start_time <- Sys.time()
+coin_fit <- stan(
   file   = "coin_model.stan",
-  data   = stan_data,
+  data   = coin_data,
   chains = 8,
   iter   = 5000,
-  warmup = 1000,
-  seed   = 253
+  warmup = 1000
 )
+end_time <- Sys.time()
+print(end_time - start_time)
 
-print(fit, pars = c("theta1", "theta2"))
+print(coin_fit, pars = c("theta1", "theta2"))
 
-samples <- extract(fit)
+coin_samples <- extract(coin_fit)
 
-cat("Posterior mean theta1:", mean(samples$theta1), "\n")
-cat("Posterior mean theta2:", mean(samples$theta2), "\n")
+print(paste("Posterior mean theta1:", mean(coin_samples$theta1)))
+print(paste("Posterior mean theta2:", mean(coin_samples$theta2)))
 
-cat("95% CI theta1:", quantile(samples$theta1, c(0.025, 0.975)), "\n")
-cat("95% CI theta2:", quantile(samples$theta2, c(0.025, 0.975)), "\n")
-
+cat("95% CI theta1:", quantile(coin_samples$theta1, c(0.025, 0.975)), "\n")
+cat("95% CI theta2:", quantile(coin_samples$theta2, c(0.025, 0.975)), "\n")
 ```
 
 ```{r}
-
-traceplot(fit)
-
+traceplot(coin_fit)
 ```
 
 ```{r}
-
-ci_df <- data.frame(
+coin_ci_df <- data.frame(
   param = c("theta1", "theta2"),
   mean  = c(mean(samples$theta1), mean(samples$theta2)),
   lower = c(quantile(samples$theta1, 0.025), quantile(samples$theta2, 0.025)),
   upper = c(quantile(samples$theta1, 0.975), quantile(samples$theta2, 0.975))
 )
-
 ```
 
 ```{r}
+# Define the Parameters & Data
+alpha_prior <- 90
+beta_prior <- 10
 
-ggplot(ci_df, aes(x = mean, y = param)) +
+# Data from the streams
+y1 <- sum(coin_df$Heads[coin_df$Stream == 1])
+n1 <- sum(coin_df$Stream == 1)
+
+# Define the Log-Posterior Function
+log_posterior_fn <- function(theta1) {
+  log_likelihood <- dbinom(x = y1, size = n1, prob = theta1, log = TRUE)
+  log_prior <- dbeta(x = theta1, shape1 = alpha_prior, shape2 = beta_prior, log = TRUE)
+  log_posterior <- log_likelihood + log_prior
+  return(log_posterior)
+}
+
+start_time <- Sys.time()
+
+# Run the optimization
+initial_guess <- 0.5 
+fit <- optim(par = initial_guess, 
+             fn = log_posterior_fn, 
+             method = "L-BFGS-B",  # Use the bounded optimizer
+             lower = 0.0001,       # Prevent testing exactly 0
+             upper = 0.9999,       # Prevent testing exactly 1
+             control = list(fnscale = -1),
+             hessian = TRUE)
+
+# Negate the Hessian to find Variance
+theta_map <- fit$par
+
+# We negate it (-H) and invert it to get the variance.
+laplace_var <- solve(-fit$hessian)
+laplace_sd <- sqrt(as.numeric(laplace_var))
+
+end_time <- Sys.time()
+print(end_time - start_time)
+
+# Print the final Laplace Approximation stats
+print(paste("Mode (Theta 1 MAP): ", theta_map))
+# print(paste("Variance: ", as.numeric(laplace_var)))
+# print(paste("Standard Deviation: ", laplace_sd))
+# Calculate the 95% Credible Interval
+ci_lower <- qnorm(0.025, mean = theta_map, sd = laplace_sd)
+ci_upper <- qnorm(0.975, mean = theta_map, sd = laplace_sd)
+print(paste("95% CI: ", ci_lower, ",", ci_upper))
+```
+
+
+```{r}
+# Integrated Squared Error
+theta1_hmc <- coin_samples$theta1
+theta2_hmc <- coin_samples$theta2
+
+mu1 <- 0.8283
+sd1 <- sqrt(0.000718)
+
+mu2 <- 0.8535
+sd2 <- sqrt(0.000631)
+
+# x-grid base on HMC
+dens1 <- density(theta1_hmc, n = 4096)
+dens2 <- density(theta2_hmc, n = 4096)
+
+# Calculate the Laplace y-coordinates at the exact same x-grid
+laplace_y1 <- dnorm(dens1$x, mean = mu1, sd = sd1)
+laplace_y2 <- dnorm(dens2$x, mean = mu2, sd = sd2)
+
+# Calculate the width of each tiny grid slice
+dx1 <- dens1$x[2] - dens1$x[1]
+dx2 <- dens2$x[2] - dens2$x[1]
+
+# Integrate the squared difference
+integrated_squared_error1 <- sum((dens1$y - laplace_y1)**2 * dx1)
+integrated_squared_error2 <- sum((dens2$y - laplace_y2)**2 * dx2)
+
+print(paste("Integrated Squared Error (theta 1): ", integrated_squared_error1))
+print(paste("Integrated Squared Error (theta 2): ", integrated_squared_error2))
+```
+
+
+```{r}
+
+ggplot(coin_ci_df, aes(x = mean, y = param)) +
   geom_point(size = 3) +
   geom_errorbar(aes(xmin = lower, xmax = upper), width = 0.1) +
   xlim(0.73, 1)+
@@ -117,19 +197,44 @@ pp_samples %>%
 
 ```
 
+```{r}
+cat_df <- data.frame(
+  Hour = c(1, 2),
+  Cat_Sighted = c(0, 1)
+)
+
+cat_df %>%
+  ggplot(aes(x = Hour, y = Cat_Sighted)) +
+  geom_bar(stat = "identity", fill = "#F8766D") +
+  labs(
+    title = "Cat-crossings Over 2 Hours", 
+    x = "Hour",
+    y = "Cat-crossings Observed"
+    ) +
+  scale_y_continuous(breaks = c(0, 1)) +
+  scale_x_continuous(breaks = c(1, 2))
+```
+
+
 
 ```{r}
+# The average number of cats crossing the Grand every hour
+# Measure the observed number of cat-crossings using a Poisson distribution
+
+# Assume cat-crossings are rare, roughly 0.6 cat-crossings per hour
+# Gamma distribution makes sense here since the possibility of cat-tsunami is not unheard of (long tail).
 # Define the Parameters & Data
 alpha_prior <- 1.2
 beta_prior <- 0.2
 
+# Watched for two hours (y1 and y2)
 # Data from the streams
 y1 <- 0  # 0 cats in stream 1
 y2 <- 1  # 1 cat in stream 2
 
 # Calculations for true density (for comparison visualization only)
-alpha_post <- alpha_prior + 1
-beta_post <- beta_prior + 2
+alpha_post <- alpha_prior + 1 # (number of cats)
+beta_post <- beta_prior + 2 # (number of hours)
 
 # Define the Log-Posterior Function
 log_posterior_fn <- function(lambda) {
@@ -139,6 +244,8 @@ log_posterior_fn <- function(lambda) {
   return(log(posterior))
 }
 
+
+start_time <- Sys.time()
 # Run the optimization
 initial_guess <- 1
 fit <- optim(par = initial_guess, 
@@ -154,10 +261,40 @@ lambda_map <- fit$par
 # We negate it (-H) and invert it to get the variance.
 laplace_var <- solve(-fit$hessian)
 laplace_sd <- sqrt(as.numeric(laplace_var))
+end_time <- Sys.time()
+print(end_time - start_time)
 
-cat("Mode (Lambda MAP):         ", round(lambda_map, 5), "\n")
-cat("Variance (Lambda):         ", round(as.numeric(laplace_var), 5), "\n")
-cat("Standard Deviation:       ", round(laplace_sd, 5), "\n\n")
+print(paste("Mode: ", lambda_map))
+print(paste("Variance: ", as.numeric(laplace_var)))
+print(paste("Standard Deviation: ", laplace_sd))
+```
+
+```{r}
+cat_data <- list(
+  y = cat_df$Cat_Sighted,
+  n = length(cat_df$Cat_Sighted),
+  alpha = 1.2,
+  beta = 0.2
+)
+
+start_time <- Sys.time()
+cat_fit <- stan(
+  file   = "cat_crossing.stan",
+  data   = cat_data,
+  chains = 4,
+  iter   = 5000,
+  warmup = 1000
+)
+end_time <- Sys.time()
+print(end_time - start_time)
+
+print(cat_fit, pars = "lambda")
+
+cat_samples <- extract(cat_fit)
+
+print(paste("Posterior mean lambda:", mean(cat_samples$lambda)))
+
+cat("95% CI lambda:", quantile(cat_samples$lambda, c(0.025, 0.975)), "\n")
 ```
 
 ```{r}
@@ -171,7 +308,7 @@ laplace_density <- dnorm(x_vals, mean = lambda_map, sd = laplace_sd)
 # Plot the True Posterior
 plot(x_vals, true_density, type = "l", lwd = 3, col = "blue",
      main = "Laplace Approx: 2 Streams (1 Cat Total)",
-     xlab = "Rate of Feral Cats (lambda)", ylab = "Density",
+     xlab = "Rate of Cat Crossings (lambda)", ylab = "Density",
      xlim = c(-1, 3.5), ylim = c(0, max(true_density, laplace_density) + 0.1))
 
 # Overlay the Laplace Approximation
@@ -180,14 +317,8 @@ lines(x_vals, laplace_density, lwd = 3, col = "red", lty = 2)
 # Add a vertical line at zero to show the impossible domain
 abline(v = 0, lwd = 2, lty = 3, col = "black")
 
-# Add a legend
-legend("topright", legend = c("True Gamma Posterior", "Laplace Normal Approx", "Physical Boundary (0)"),
-       col = c("blue", "red", "black"), lty = c(1, 2, 3), lwd = 2)
-
 # Print out the impossible negative probability mass
 prob_negative <- pnorm(0, mean = lambda_map, sd = laplace_sd)
-cat("\nUpdated Mean (MAP):", round(lambda_map, 3))
-cat("\nUpdated Standard Deviation:", round(laplace_sd, 3))
-cat("\nProbability mass assigned to impossible negative values:", round(prob_negative * 100, 2), "%\n")
+print(paste("Probability mass assigned to negative values: ", prob_negative * 100))
 ```
 
